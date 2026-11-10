@@ -1,0 +1,57 @@
+name: Docker build and test
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  docker-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create .env
+        run: cp .env.example .env
+
+      - name: Build and start containers
+        run: docker compose up --build -d
+
+      - name: Wait for API
+        run: |
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:3000/health && exit 0
+            sleep 2
+          done
+          docker compose logs
+          exit 1
+
+      - name: Containers status
+        run: docker compose ps
+
+      - name: Test courses endpoint
+        run: curl -sf http://localhost:3000/api/courses
+
+      - name: Test attendance (201 then 409)
+        run: |
+          code1=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:3000/api/attendance -H "Content-Type: application/json" -d '{"student_id":1,"session_id":1}')
+          code2=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:3000/api/attendance -H "Content-Type: application/json" -d '{"student_id":1,"session_id":1}')
+          echo "first=$code1 second=$code2"
+          [ "$code1" = "201" ] && [ "$code2" = "409" ]
+
+      - name: Test web proxy
+        run: curl -sf http://localhost:8080/api/courses
+
+      - name: Test persistence (down and up)
+        run: |
+          docker compose down
+          docker compose up -d
+          for i in $(seq 1 60); do curl -sf http://localhost:3000/health && break; sleep 2; done
+          curl -sf http://localhost:3000/api/courses
+
+      - name: Logs
+        if: always()
+        run: docker compose logs
+
+      - name: Stop
+        if: always()
+        run: docker compose down -v
